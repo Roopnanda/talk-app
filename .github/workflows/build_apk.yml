@@ -1,0 +1,46 @@
+name: Build debug APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack project from zip (first run only)
+        run: |
+          if [ -f talk_app_source.zip ]; then
+            unzip -o talk_app_source.zip
+            shopt -s dotglob
+            mv language_talk_app/* .
+            rmdir language_talk_app
+            rm talk_app_source.zip
+          else
+            echo "No zip found — project already unpacked, continuing."
+          fi
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Generate native platform folders
+        run: flutter create --org com.example.talk --project-name talk_app .
+
+      - name: Patch AndroidManifest.xml with required permissions
+        run: python3 scripts/merge_manifest.py
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build debug APK
+        run: flutter build apk --debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: talk-app-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
