@@ -12,12 +12,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Unpack project from zip (first run only)
+        shell: bash
         run: |
           if [ -f talk_app_source.zip ]; then
             unzip -o talk_app_source.zip
-            shopt -s dotglob
-            mv language_talk_app/* .
-            rmdir language_talk_app
+            cp -a language_talk_app/. .
+            rm -rf language_talk_app
             rm talk_app_source.zip
           else
             echo "No zip found — project already unpacked, continuing."
