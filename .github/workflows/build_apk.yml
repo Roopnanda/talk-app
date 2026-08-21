@@ -16,7 +16,7 @@ jobs:
         run: |
           if [ -f talk_app_source.zip ]; then
             unzip -o talk_app_source.zip
-            cp -a language_talk_app/. .
+            cp -an language_talk_app/. .
             rm -rf language_talk_app
             rm talk_app_source.zip
           else
