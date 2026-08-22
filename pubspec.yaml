@@ -12,27 +12,27 @@ dependencies:
     sdk: flutter
 
   # State/storage
-  shared_preferences: ^2.2.3
+  shared_preferences: any
 
   # Backend
-  firebase_core: ^2.32.0
-  firebase_auth: ^4.20.0
-  cloud_firestore: ^4.17.5
+  firebase_core: any
+  firebase_auth: any
+  cloud_firestore: any
 
   # Calling
-  flutter_webrtc: ^0.10.2
+  flutter_webrtc: any
 
   # Monetization
-  google_mobile_ads: ^5.1.0
+  google_mobile_ads: any
 
   # Dictionary lookups + typography
-  http: ^1.2.2
-  google_fonts: ^6.2.1
+  http: any
+  google_fonts: any
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^4.0.0
+  flutter_lints: any
 
 flutter:
   uses-material-design: true
