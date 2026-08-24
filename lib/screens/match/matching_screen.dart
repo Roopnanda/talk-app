@@ -22,6 +22,7 @@ class _MatchingScreenState extends State<MatchingScreen> {
   final _storage = LocalStorageService();
   StreamSubscription<String>? _incomingSub;
   bool _navigated = false;
+  String? _error;
 
   @override
   void initState() {
@@ -30,19 +31,27 @@ class _MatchingScreenState extends State<MatchingScreen> {
   }
 
   Future<void> _startSearch() async {
-    final uid = await AuthService.instance.ensureSignedIn();
-    final gender = await _storage.getGender();
+    try {
+      final uid = await AuthService.instance.ensureSignedIn();
+      final gender = await _storage.getGender();
 
-    // Listen in case someone else claims us from the queue first.
-    _incomingSub = _matchmaking.watchForIncomingCall(uid).listen((callId) {
-      _goToCall(callId, isOfferer: false);
-    });
+      // Listen in case someone else claims us from the queue first.
+      // onError matters as much as the data callback here — a failed
+      // query (e.g. a missing Firestore index) used to fail completely
+      // silently, leaving you stuck on this screen with no clue why.
+      _incomingSub = _matchmaking.watchForIncomingCall(uid).listen(
+        (callId) => _goToCall(callId, isOfferer: false),
+        onError: (e) => setState(() => _error = e.toString()),
+      );
 
-    final callId = await _matchmaking.findOrQueue(uid: uid, gender: gender.storageValue);
-    if (callId != null) {
-      _goToCall(callId, isOfferer: true);
+      final callId = await _matchmaking.findOrQueue(uid: uid, gender: gender.storageValue);
+      if (callId != null) {
+        _goToCall(callId, isOfferer: true);
+      }
+      // else: we're queued and waiting — the stream listener above will fire.
+    } catch (e) {
+      setState(() => _error = e.toString());
     }
-    // else: we're queued and waiting — the stream listener above will fire.
   }
 
   void _goToCall(String callId, {required bool isOfferer}) {
@@ -73,40 +82,80 @@ class _MatchingScreenState extends State<MatchingScreen> {
     return Scaffold(
       body: GradientBackground(
         child: SafeArea(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Spacer(),
-              const VoiceOrb(size: 150, active: true),
-              const SizedBox(height: 32),
-              Text('Finding someone to talk to…',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              Text('Usually takes a few seconds',
-                  style: Theme.of(context).textTheme.bodyMedium),
-              const Spacer(),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 40),
-                child: GestureDetector(
-                  onTap: _cancel,
-                  child: GlassContainer(
-                    borderRadius: 999,
-                    padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.close_rounded, size: 18, color: AppColors.textMuted),
-                        SizedBox(width: 8),
-                        Text('Cancel', style: TextStyle(color: AppColors.textMuted)),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          child: _error != null ? _buildError(context) : _buildSearching(context),
         ),
       ),
+    );
+  }
+
+  Widget _buildError(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Matching failed — screenshot this',
+              style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Expanded(
+            child: SingleChildScrollView(
+              child: SelectableText(
+                _error!,
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+          Center(
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: GlassContainer(
+                borderRadius: 999,
+                padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
+                child: const Text('Back', style: TextStyle(color: AppColors.textMuted)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearching(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Spacer(),
+        const VoiceOrb(size: 150, active: true),
+        const SizedBox(height: 32),
+        Text('Finding someone to talk to…',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text('Usually takes a few seconds',
+            style: Theme.of(context).textTheme.bodyMedium),
+        const Spacer(),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 40),
+          child: GestureDetector(
+            onTap: _cancel,
+            child: GlassContainer(
+              borderRadius: 999,
+              padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Icon(Icons.close_rounded, size: 18, color: AppColors.textMuted),
+                  SizedBox(width: 8),
+                  Text('Cancel', style: TextStyle(color: AppColors.textMuted)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
