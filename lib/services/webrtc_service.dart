@@ -3,13 +3,8 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 /// Handles the actual audio call. Firestore is only ever used to trade
 /// the SDP offer/answer and ICE candidates — once that handshake finishes,
-/// audio flows directly device-to-device (peer-to-peer), not through any
-/// server of ours.
-///
-/// STUN-only to start (Google's free public server). If you see calls
-/// failing to connect for users behind strict NATs/corporate firewalls,
-/// that's when you add a TURN relay — don't pay for one before you have
-/// evidence you need it.
+/// audio flows directly device-to-device (peer-to-peer) when possible, or
+/// relayed through the TURN server below when it isn't.
 class WebrtcService {
   WebrtcService({FirebaseFirestore? firestore}) : _db = firestore ?? FirebaseFirestore.instance;
 
@@ -19,12 +14,38 @@ class WebrtcService {
   MediaStream? _localStream;
   final _remoteRenderer = <void Function(MediaStream)>[];
 
+  // Google's free STUN (unlimited, no credentials) plus Metered's free-tier
+  // TURN relay for when direct peer-to-peer isn't possible (different
+  // networks, strict NAT, etc). The TURN username/credential below are
+  // real and live in this source file in plain text — that's an accepted
+  // trade-off for now (Metered's free/static-credential tier works this
+  // way by design, unlike Cloudflare's short-lived-only model), not
+  // something to treat as a real secret. Revisit before a public launch
+  // if usage grows enough to justify Cloudflare's larger free tier.
   static const Map<String, dynamic> _iceServers = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-      // TODO once you have TURN credentials:
-      // {'urls': 'turn:your.turn.server:3478', 'username': '...', 'credential': '...'},
+      {'urls': 'stun:stun.relay.metered.ca:80'},
+      {
+        'urls': 'turn:global.relay.metered.ca:80',
+        'username': '5db552fdc8cd34e9d089ffd4',
+        'credential': '/uYY9nOm+6G31m/x',
+      },
+      {
+        'urls': 'turn:global.relay.metered.ca:80?transport=tcp',
+        'username': '5db552fdc8cd34e9d089ffd4',
+        'credential': '/uYY9nOm+6G31m/x',
+      },
+      {
+        'urls': 'turn:global.relay.metered.ca:443',
+        'username': '5db552fdc8cd34e9d089ffd4',
+        'credential': '/uYY9nOm+6G31m/x',
+      },
+      {
+        'urls': 'turns:global.relay.metered.ca:443?transport=tcp',
+        'username': '5db552fdc8cd34e9d089ffd4',
+        'credential': '/uYY9nOm+6G31m/x',
+      },
     ],
   };
 
@@ -48,6 +69,10 @@ class WebrtcService {
 
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
+        // Force loudspeaker output — without this, some devices route
+        // call audio to the earpiece instead, which sounds like silence
+        // unless you hold the phone right up to your ear.
+        Helper.setSpeakerphoneOn(true);
         for (final cb in _remoteRenderer) {
           cb(event.streams.first);
         }
