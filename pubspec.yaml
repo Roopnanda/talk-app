@@ -16,7 +16,12 @@ dependencies:
 
   # Backend
   firebase_core: any
-  firebase_auth: any
+  # firebase_auth 6.6.0 has a confirmed Kotlin compile-time bug (a
+  # Checker Framework annotation class becomes "inaccessible" during
+  # :firebase_auth:compileDebugKotlin — a regression in that specific
+  # release, not something in our code). Excluding it specifically
+  # rather than guessing a replacement version number.
+  firebase_auth: '<6.6.0'
   cloud_firestore: any
 
   # Calling
