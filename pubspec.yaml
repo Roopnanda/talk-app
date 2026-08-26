@@ -14,15 +14,14 @@ dependencies:
   # State/storage
   shared_preferences: any
 
-  # Backend
-  firebase_core: any
-  # firebase_auth 6.6.0 has a confirmed Kotlin compile-time bug (a
-  # Checker Framework annotation class becomes "inaccessible" during
-  # :firebase_auth:compileDebugKotlin — a regression in that specific
-  # release, not something in our code). Excluding it specifically
-  # rather than guessing a replacement version number.
-  firebase_auth: '<6.6.0'
-  cloud_firestore: any
+  # Backend — pinned to FlutterFire's own verified-compatible release set
+  # (BoM 4.15.0), not independently "any"/ranged. Mixing versions across
+  # these three plugins loosely is what caused the last two build
+  # failures (a broken 6.6.0 firebase_auth, then a firebase_auth/
+  # firebase_core pairing that doesn't actually exist together).
+  firebase_core: 4.10.0
+  firebase_auth: 6.5.2
+  cloud_firestore: 6.5.0
 
   # Calling
   flutter_webrtc: any
