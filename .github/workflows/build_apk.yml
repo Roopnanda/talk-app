@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           echo "----- Resolved versions (from pubspec.lock) -----"
-          grep -A 2 -E "^  (firebase_core|firebase_auth|cloud_firestore|firebase_core_platform_interface|firebase_auth_platform_interface|cloud_firestore_platform_interface):" pubspec.lock
+          grep -A 7 -E "^  (firebase_core|firebase_auth|cloud_firestore|firebase_core_platform_interface|firebase_auth_platform_interface|cloud_firestore_platform_interface):" pubspec.lock
 
       - name: Build debug APK
         run: flutter build apk --debug
