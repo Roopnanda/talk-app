@@ -16,12 +16,22 @@ dependencies:
 
   # Backend — pinned to FlutterFire's own verified-compatible release set
   # (BoM 4.15.0), not independently "any"/ranged. Mixing versions across
-  # these three plugins loosely is what caused the last two build
-  # failures (a broken 6.6.0 firebase_auth, then a firebase_auth/
-  # firebase_core pairing that doesn't actually exist together).
+  # these plugins loosely is what caused the last two build failures (a
+  # broken 6.6.0 firebase_auth, then a firebase_auth/firebase_core pairing
+  # that doesn't actually exist together).
   firebase_core: 4.10.0
   firebase_auth: 6.5.2
   cloud_firestore: 6.5.0
+
+  # These three are transitive (nothing in our own code imports them
+  # directly) but pub was still resolving them to versions released
+  # AFTER the three packages above, which caused a startup crash
+  # (RangeError decoding CoreFirebaseOptions — a Dart/native pigeon
+  # schema mismatch). Excluding just the newest lets pub fall back to
+  # whatever it was actually resolving to *before* that drift happened.
+  firebase_core_platform_interface: '<7.1.0'
+  firebase_auth_platform_interface: '<9.0.2'
+  cloud_firestore_platform_interface: '<8.0.2'
 
   # Calling
   flutter_webrtc: any
