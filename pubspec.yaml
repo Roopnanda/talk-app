@@ -14,24 +14,20 @@ dependencies:
   # State/storage
   shared_preferences: any
 
-  # Backend — pinned to FlutterFire's own verified-compatible release set
-  # (BoM 4.15.0), not independently "any"/ranged. Mixing versions across
-  # these plugins loosely is what caused the last two build failures (a
-  # broken 6.6.0 firebase_auth, then a firebase_auth/firebase_core pairing
-  # that doesn't actually exist together).
-  firebase_core: 4.10.0
-  firebase_auth: 6.5.2
-  cloud_firestore: 6.5.0
-
-  # These three are transitive (nothing in our own code imports them
-  # directly) but pub was still resolving them to versions released
-  # AFTER the three packages above, which caused a startup crash
-  # (RangeError decoding CoreFirebaseOptions — a Dart/native pigeon
-  # schema mismatch). Excluding just the newest lets pub fall back to
-  # whatever it was actually resolving to *before* that drift happened.
-  firebase_core_platform_interface: '<7.1.0'
-  firebase_auth_platform_interface: '<9.0.2'
-  cloud_firestore_platform_interface: '<8.0.2'
+  # Backend — reverted to fully unconstrained after the manually-pinned
+  # BoM 4.15.0 set (4.10.0 / 6.5.2 / 6.5.0) built successfully but still
+  # crashed at runtime with a Dart/native pigeon decode mismatch
+  # (RangeError in CoreFirebaseOptions.decode). That crash persisted even
+  # after excluding the one platform_interface version suspected of
+  # causing it, which means the manual pin was fighting pub's own
+  # resolver rather than fixing the real problem. Letting pub freely
+  # resolve the whole graph again is the more reliable path — if the
+  # original firebase_auth 6.6.0 Kotlin compile bug has since been
+  # patched upstream (likely, given the time that's passed), this should
+  # now resolve cleanly on its own.
+  firebase_core: any
+  firebase_auth: any
+  cloud_firestore: any
 
   # Calling
   flutter_webrtc: any
