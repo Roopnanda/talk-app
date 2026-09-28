@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../../models/user_profile.dart';
 import '../../services/auth_service.dart';
@@ -35,34 +36,65 @@ class _MatchingScreenState extends State<MatchingScreen> {
       final uid = await AuthService.instance.ensureSignedIn();
       final gender = await _storage.getGender();
 
+      await _clearStaleState(uid);
+
       // Listen in case someone else claims us from the queue first.
-      // onError matters as much as the data callback here — a failed
-      // query (e.g. a missing Firestore index) used to fail completely
-      // silently, leaving you stuck on this screen with no clue why.
       _incomingSub = _matchmaking.watchForIncomingCall(uid).listen(
-        (callId) => _goToCall(callId, isOfferer: false),
-        onError: (e) => setState(() => _error = e.toString()),
+        (callId) => _goToCall(callId),
+        onError: (e) {
+          if (mounted) setState(() => _error = e.toString());
+        },
       );
 
       final callId = await _matchmaking.findOrQueue(uid: uid, gender: gender.storageValue);
-      if (callId != null) {
-        _goToCall(callId, isOfferer: true);
-      }
+      if (callId != null) _goToCall(callId);
       // else: we're queued and waiting — the stream listener above will fire.
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     }
   }
 
-  void _goToCall(String callId, {required bool isOfferer}) {
+  /// Best-effort cleanup of leftovers from earlier attempts (a queue slot
+  /// never cancelled, or a call left "pending" after a failure). Without
+  /// this, a dead call can pull you straight back into it on the next try.
+  Future<void> _clearStaleState(String uid) async {
+    try {
+      final db = FirebaseFirestore.instance;
+      await db.collection('matchQueue').doc(uid).delete();
+      final stale = await db
+          .collection('calls')
+          .where('participants', arrayContains: uid)
+          .where('status', isEqualTo: 'pending')
+          .orderBy('createdAt', descending: true)
+          .get();
+      for (final doc in stale.docs) {
+        await doc.reference.update({'status': 'ended'});
+      }
+    } catch (_) {
+      // Non-fatal: matching itself will surface any real problem.
+    }
+  }
+
+  /// Both paths (we found someone / someone found us) end up here. The role
+  /// is decided from the shared call record, NOT from which path fired
+  /// first — that race is what left both phones waiting for an offer.
+  Future<void> _goToCall(String callId) async {
     if (_navigated) return;
-    _navigated = true;
+    _navigated = true; // set immediately so only one trigger wins
     _incomingSub?.cancel();
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => CallScreen(callId: callId, isOfferer: isOfferer),
-      ),
-    );
+    try {
+      final myUid = AuthService.instance.uid;
+      final snap = await FirebaseFirestore.instance.collection('calls').doc(callId).get();
+      final isOfferer = snap.data()?['offererUid'] == myUid;
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => CallScreen(callId: callId, isOfferer: isOfferer),
+        ),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    }
   }
 
   Future<void> _cancel() async {
