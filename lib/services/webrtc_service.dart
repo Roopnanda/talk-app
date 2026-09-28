@@ -23,6 +23,11 @@ class WebrtcService {
   bool _answerApplyStarted = false;
   final List<RTCIceCandidate> _pendingCandidates = [];
 
+  // Calls start on the earpiece, like a normal phone call. The in-call
+  // Speaker button flips this.
+  bool _speakerOn = false;
+  bool get speakerOn => _speakerOn;
+
   // Google's free STUN plus Metered's free-tier TURN relay for when direct
   // peer-to-peer isn't possible. These credentials live in plain text in
   // the source by design of Metered's static-credential tier — not a real
@@ -74,14 +79,43 @@ class WebrtcService {
 
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
-        // Force loudspeaker output — some devices otherwise route call
-        // audio to the earpiece, which sounds like silence.
-        Helper.setSpeakerphoneOn(true);
+        // Re-apply the chosen route (earpiece unless the user tapped
+        // Speaker) — some phones reset it when remote audio starts.
+        _applyAudioRoute();
         for (final cb in _remoteRenderer) {
           cb(event.streams.first);
         }
       }
     };
+
+    // flutter_webrtc can default to loudspeaker, so set the route
+    // explicitly instead of trusting the default.
+    await _applyAudioRoute();
+  }
+
+  Future<void> _applyAudioRoute() async {
+    if (_pc == null) return;
+    try {
+      await Helper.setSpeakerphoneOn(_speakerOn);
+    } catch (_) {
+      // A failed route change shouldn't kill the call.
+    }
+    // The route has been reported to snap back a few seconds after being
+    // set on some devices; applying once more makes the choice stick.
+    Future.delayed(const Duration(seconds: 3), () async {
+      if (_pc == null) return;
+      try {
+        await Helper.setSpeakerphoneOn(_speakerOn);
+      } catch (_) {}
+    });
+  }
+
+  /// Flips between earpiece and loudspeaker. Returns true if the
+  /// loudspeaker is now on.
+  Future<bool> toggleSpeaker() async {
+    _speakerOn = !_speakerOn;
+    await _applyAudioRoute();
+    return _speakerOn;
   }
 
   /// The phone that was waiting in the queue creates the offer.
@@ -102,9 +136,6 @@ class WebrtcService {
       final answer = snap.data()?['answer'];
       final pc = _pc;
       if (answer == null || pc == null || _answerApplyStarted) return;
-      // (Previously this checked getRemoteDescription() == null, but that
-      // returns a Future, so the comparison was always false and the
-      // answer was never applied.)
       _answerApplyStarted = true;
       await pc.setRemoteDescription(RTCSessionDescription(answer['sdp'], answer['type']));
       await _markRemoteDescriptionApplied();
