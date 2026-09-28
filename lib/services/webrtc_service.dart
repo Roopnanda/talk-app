@@ -1,10 +1,11 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 /// Handles the actual audio call. Firestore is only ever used to trade
 /// the SDP offer/answer and ICE candidates — once that handshake finishes,
-/// audio flows directly device-to-device (peer-to-peer) when possible, or
-/// relayed through the TURN server below when it isn't.
+/// audio flows directly device-to-device when possible, or through the
+/// TURN relay below when it isn't.
 class WebrtcService {
   WebrtcService({FirebaseFirestore? firestore}) : _db = firestore ?? FirebaseFirestore.instance;
 
@@ -13,15 +14,19 @@ class WebrtcService {
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
   final _remoteRenderer = <void Function(MediaStream)>[];
+  final List<StreamSubscription> _subs = [];
 
-  // Google's free STUN (unlimited, no credentials) plus Metered's free-tier
-  // TURN relay for when direct peer-to-peer isn't possible (different
-  // networks, strict NAT, etc). The TURN username/credential below are
-  // real and live in this source file in plain text — that's an accepted
-  // trade-off for now (Metered's free/static-credential tier works this
-  // way by design, unlike Cloudflare's short-lived-only model), not
-  // something to treat as a real secret. Revisit before a public launch
-  // if usage grows enough to justify Cloudflare's larger free tier.
+  // The other side's ICE candidates can arrive from Firestore BEFORE we've
+  // applied their SDP. Adding a candidate before that fails, so they wait
+  // here until the remote description is in place.
+  bool _remoteDescriptionApplied = false;
+  bool _answerApplyStarted = false;
+  final List<RTCIceCandidate> _pendingCandidates = [];
+
+  // Google's free STUN plus Metered's free-tier TURN relay for when direct
+  // peer-to-peer isn't possible. These credentials live in plain text in
+  // the source by design of Metered's static-credential tier — not a real
+  // secret. Revisit before a public launch.
   static const Map<String, dynamic> _iceServers = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
@@ -69,9 +74,8 @@ class WebrtcService {
 
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
-        // Force loudspeaker output — without this, some devices route
-        // call audio to the earpiece instead, which sounds like silence
-        // unless you hold the phone right up to your ear.
+        // Force loudspeaker output — some devices otherwise route call
+        // audio to the earpiece, which sounds like silence.
         Helper.setSpeakerphoneOn(true);
         for (final cb in _remoteRenderer) {
           cb(event.streams.first);
@@ -80,8 +84,7 @@ class WebrtcService {
     };
   }
 
-  /// Call this if you were the one who found the other person waiting
-  /// (see MatchmakingService.offererUid).
+  /// The phone that was waiting in the queue creates the offer.
   Future<void> startAsOfferer(String callId) async {
     await _setupPeerConnection(callId);
 
@@ -95,28 +98,25 @@ class WebrtcService {
       'offer': {'sdp': offer.sdp, 'type': offer.type},
     });
 
-    _callDoc(callId).snapshots().listen((snap) async {
-      final data = snap.data();
-      if (data == null) return;
-      final answer = data['answer'];
-      if (answer != null && _pc!.getRemoteDescription() == null) {
-        await _pc!.setRemoteDescription(
-          RTCSessionDescription(answer['sdp'], answer['type']),
-        );
-      }
-    });
+    _subs.add(_callDoc(callId).snapshots().listen((snap) async {
+      final answer = snap.data()?['answer'];
+      final pc = _pc;
+      if (answer == null || pc == null || _answerApplyStarted) return;
+      // (Previously this checked getRemoteDescription() == null, but that
+      // returns a Future, so the comparison was always false and the
+      // answer was never applied.)
+      _answerApplyStarted = true;
+      await pc.setRemoteDescription(RTCSessionDescription(answer['sdp'], answer['type']));
+      await _markRemoteDescriptionApplied();
+    }));
 
-    _callDoc(callId).collection('answerCandidates').snapshots().listen((snap) {
-      for (final change in snap.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          _pc!.addCandidate(_candidateFromMap(change.doc.data()!));
-        }
-      }
-    });
+    _subs.add(_callDoc(callId)
+        .collection('answerCandidates')
+        .snapshots()
+        .listen(_handleCandidateSnapshot));
   }
 
-  /// Call this if MatchmakingService told you someone else claimed you
-  /// (you're the answererUid on the call doc).
+  /// The phone that found someone waiting answers the offer.
   Future<void> joinAsAnswerer(String callId) async {
     await _setupPeerConnection(callId);
 
@@ -124,15 +124,11 @@ class WebrtcService {
       _callDoc(callId).collection('answerCandidates').add(candidate.toMap());
     };
 
-    // The offerer writes their SDP offer from a DIFFERENT device, on its
-    // own timeline — their mic/peer-connection setup might still be in
-    // progress right now. A single one-shot read here was a race
-    // condition: it can fire before the offer exists yet. Listen instead
-    // of reading once, and give it a real timeout rather than hanging
-    // forever if the other person's connection genuinely never arrives.
+    // The offer is written from the OTHER device on its own timeline, so
+    // wait for it (with a timeout) instead of reading once.
     final snap = await _callDoc(callId)
         .snapshots()
-        .firstWhere((snap) => snap.data()?['offer'] != null)
+        .firstWhere((s) => s.data()?['offer'] != null)
         .timeout(
           const Duration(seconds: 30),
           onTimeout: () => throw StateError(
@@ -142,20 +138,48 @@ class WebrtcService {
 
     final offer = snap.data()!['offer'];
     await _pc!.setRemoteDescription(RTCSessionDescription(offer['sdp'], offer['type']));
+    await _markRemoteDescriptionApplied();
+
+    _subs.add(_callDoc(callId)
+        .collection('offerCandidates')
+        .snapshots()
+        .listen(_handleCandidateSnapshot));
 
     final answer = await _pc!.createAnswer();
     await _pc!.setLocalDescription(answer);
     await _callDoc(callId).update({
       'answer': {'sdp': answer.sdp, 'type': answer.type},
     });
+  }
 
-    _callDoc(callId).collection('offerCandidates').snapshots().listen((snap) {
-      for (final change in snap.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          _pc!.addCandidate(_candidateFromMap(change.doc.data()!));
-        }
+  void _handleCandidateSnapshot(QuerySnapshot<Map<String, dynamic>> snap) {
+    for (final change in snap.docChanges) {
+      if (change.type == DocumentChangeType.added) {
+        final data = change.doc.data();
+        if (data == null) continue;
+        _onRemoteCandidate(_candidateFromMap(data));
       }
-    });
+    }
+  }
+
+  void _onRemoteCandidate(RTCIceCandidate candidate) {
+    final pc = _pc;
+    if (pc == null) return;
+    if (_remoteDescriptionApplied) {
+      pc.addCandidate(candidate);
+    } else {
+      _pendingCandidates.add(candidate);
+    }
+  }
+
+  Future<void> _markRemoteDescriptionApplied() async {
+    _remoteDescriptionApplied = true;
+    final pc = _pc;
+    if (pc == null) return;
+    for (final c in List<RTCIceCandidate>.from(_pendingCandidates)) {
+      await pc.addCandidate(c);
+    }
+    _pendingCandidates.clear();
   }
 
   RTCIceCandidate _candidateFromMap(Map<String, dynamic> map) {
@@ -170,6 +194,11 @@ class WebrtcService {
   }
 
   Future<void> hangUp() async {
+    for (final s in _subs) {
+      await s.cancel();
+    }
+    _subs.clear();
+    _pendingCandidates.clear();
     for (final track in _localStream?.getTracks() ?? <MediaStreamTrack>[]) {
       await track.stop();
     }
