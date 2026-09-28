@@ -9,7 +9,6 @@ import '../../services/webrtc_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/glass_container.dart';
 import '../../widgets/gradient_background.dart';
-import '../../widgets/primary_button.dart';
 import '../../widgets/voice_orb.dart';
 import '../home/home_screen.dart';
 
@@ -31,6 +30,7 @@ class _CallScreenState extends State<CallScreen> {
   Timer? _ticker;
   Duration _elapsed = Duration.zero;
   bool _muted = false;
+  bool _speakerOn = false;
   bool _connecting = true;
   String? _otherUid;
   String? _error;
@@ -69,10 +69,6 @@ class _CallScreenState extends State<CallScreen> {
         setState(() => _elapsed += const Duration(seconds: 1));
       });
     } catch (e) {
-      // Was previously unhandled — a mic-permission denial, a Firestore
-      // rules rejection, or a WebRTC setup failure would all just leave
-      // this screen stuck on "Connecting…" forever with zero indication
-      // why. Now it tells you.
       if (mounted) setState(() => _error = e.toString());
     }
   }
@@ -188,6 +184,15 @@ class _CallScreenState extends State<CallScreen> {
                         onTap: () => setState(() => _muted = _webrtc.toggleMute()),
                       ),
                       _circleAction(
+                        icon: _speakerOn ? Icons.volume_up_rounded : Icons.volume_down_rounded,
+                        label: 'Speaker',
+                        active: _speakerOn,
+                        onTap: () async {
+                          final on = await _webrtc.toggleSpeaker();
+                          if (mounted) setState(() => _speakerOn = on);
+                        },
+                      ),
+                      _circleAction(
                         icon: Icons.flag_outlined,
                         label: 'Report',
                         color: AppColors.warn,
@@ -263,7 +268,13 @@ class _CallScreenState extends State<CallScreen> {
     required VoidCallback onTap,
     Color? color,
     bool filled = false,
+    bool active = false,
   }) {
+    final iconColor = filled
+        ? AppColors.bgTop
+        : active
+            ? AppColors.accent
+            : (color ?? AppColors.textPrimary);
     return GestureDetector(
       onTap: onTap,
       child: Column(
@@ -273,10 +284,16 @@ class _CallScreenState extends State<CallScreen> {
             height: 52,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: filled ? (color ?? AppColors.accent) : Colors.white.withOpacity(0.06),
-              border: filled ? null : Border.all(color: AppColors.glassBorder),
+              color: filled
+                  ? (color ?? AppColors.accent)
+                  : active
+                      ? AppColors.accent.withOpacity(0.22)
+                      : Colors.white.withOpacity(0.06),
+              border: filled
+                  ? null
+                  : Border.all(color: active ? AppColors.accent : AppColors.glassBorder),
             ),
-            child: Icon(icon, color: filled ? AppColors.bgTop : (color ?? AppColors.textPrimary)),
+            child: Icon(icon, color: iconColor),
           ),
           const SizedBox(height: 6),
           Text(label, style: Theme.of(context).textTheme.bodyMedium),
