@@ -23,15 +23,19 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
+  static const Duration _maxCallDuration = Duration(minutes: 15);
+
   final _webrtc = WebrtcService();
   final _matchmaking = MatchmakingService();
   final _reports = ReportService();
 
   Timer? _ticker;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
   Duration _elapsed = Duration.zero;
   bool _muted = false;
   bool _speakerOn = false;
   bool _connecting = true;
+  bool _endingCall = false; // guards against ending twice (local + remote signal both firing)
   String? _otherUid;
   String? _error;
 
@@ -40,6 +44,7 @@ class _CallScreenState extends State<CallScreen> {
     super.initState();
     _loadOtherParticipant();
     _connect();
+    _watchForRemoteEnd();
   }
 
   Future<void> _loadOtherParticipant() async {
@@ -49,6 +54,22 @@ class _CallScreenState extends State<CallScreen> {
     final me = AuthService.instance.uid;
     final participants = List<String>.from(data['participants'] as List);
     setState(() => _otherUid = participants.firstWhere((id) => id != me, orElse: () => ''));
+  }
+
+  /// The only way either device finds out the OTHER one hung up (or that
+  /// the 15-minute limit fired on their side first) — both devices watch
+  /// the same call document, and whoever changes `status` to "ended"
+  /// first is what the other one reacts to.
+  void _watchForRemoteEnd() {
+    _statusSub = FirebaseFirestore.instance
+        .collection('calls')
+        .doc(widget.callId)
+        .snapshots()
+        .listen((snap) {
+      if (snap.data()?['status'] == 'ended' && !_endingCall) {
+        _endCall(showAd: true, alreadyEndedRemotely: true);
+      }
+    });
   }
 
   Future<void> _connect() async {
@@ -66,7 +87,11 @@ class _CallScreenState extends State<CallScreen> {
       }
 
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
         setState(() => _elapsed += const Duration(seconds: 1));
+        if (_elapsed >= _maxCallDuration) {
+          _endCall(); // 15-minute limit reached — ends for both sides via the status listener above
+        }
       });
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -79,10 +104,17 @@ class _CallScreenState extends State<CallScreen> {
     return '$m:$s';
   }
 
-  Future<void> _endCall({bool showAd = true}) async {
+  bool get _timeRunningOut => _elapsed >= _maxCallDuration - const Duration(seconds: 60);
+
+  Future<void> _endCall({bool showAd = true, bool alreadyEndedRemotely = false}) async {
+    if (_endingCall) return;
+    _endingCall = true;
     _ticker?.cancel();
+    await _statusSub?.cancel();
     await _webrtc.hangUp();
-    await _matchmaking.endCall(widget.callId);
+    if (!alreadyEndedRemotely) {
+      await _matchmaking.endCall(widget.callId);
+    }
     if (showAd) {
       await AdsService.instance.showInterstitialBetweenCalls();
     }
@@ -149,6 +181,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _statusSub?.cancel();
     super.dispose();
   }
 
@@ -167,8 +200,12 @@ class _CallScreenState extends State<CallScreen> {
             child: Column(
               children: [
                 const SizedBox(height: 12),
-                Text(_connecting ? 'Connecting…' : _formattedTime,
-                    style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  _connecting ? 'Connecting…' : _formattedTime,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: _timeRunningOut ? AppColors.warn : null,
+                      ),
+                ),
                 const Spacer(),
                 VoiceOrb(size: 150, active: !_connecting),
                 const Spacer(),
