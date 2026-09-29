@@ -42,7 +42,11 @@ class MatchmakingService {
         if (!freshSnap.exists) {
           throw StateError('candidate_already_claimed');
         }
-        final claimed = candidate;
+        // `candidate` is nullable to the analyzer even after the null
+        // check above (a Dart limitation across the `await` inside this
+        // closure) — binding it here with `!` gives us a genuinely
+        // non-nullable value for everything below.
+        final claimed = candidate!;
 
         final callRef = _calls.doc();
         tx.set(callRef, {
@@ -84,10 +88,6 @@ class MatchmakingService {
         .map((snap) => snap.docs.first.id);
   }
 
-  /// [status] defaults to a normal end. Pass 'ended_by_report' when the
-  /// call is ending because someone just reported the other person — the
-  /// other device checks this value to decide whether it's safe to offer
-  /// a reconnect (it never is, after a report).
   Future<void> endCall(String callId, {String status = 'ended'}) {
     return _calls.doc(callId).update({'status': status, 'endedAt': FieldValue.serverTimestamp()});
   }
