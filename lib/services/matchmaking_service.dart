@@ -3,12 +3,6 @@ import 'report_service.dart';
 
 /// Pairs two waiting users and creates the `calls/{callId}` document that
 /// [WebrtcService] then uses for signaling.
-///
-/// Deliberately client-side + transaction-based rather than a Cloud
-/// Function: it's simpler to stand up (no Blaze-plan Functions deploy
-/// needed to get a working MVP) and is plenty for the traffic this kind
-/// of app sees at launch. Move pairing into a Cloud Function later if you
-/// need server-side fairness/anti-abuse checks the client shouldn't see.
 class MatchmakingService {
   MatchmakingService({FirebaseFirestore? firestore, ReportService? reportService})
       : _db = firestore ?? FirebaseFirestore.instance,
@@ -20,9 +14,6 @@ class MatchmakingService {
   CollectionReference<Map<String, dynamic>> get _queue => _db.collection('matchQueue');
   CollectionReference<Map<String, dynamic>> get _calls => _db.collection('calls');
 
-  /// Tries to claim someone already waiting. If nobody's there, adds
-  /// yourself to the queue and returns null — call [watchForIncomingCall]
-  /// to find out when someone else claims you.
   Future<String?> findOrQueue({required String uid, required String gender}) async {
     if (await _reports.isSuspended(uid)) {
       throw StateError('This account can no longer be matched.');
@@ -30,10 +21,7 @@ class MatchmakingService {
 
     final blocked = await _reports.blockedIds();
 
-    final candidates = await _queue
-        .orderBy('joinedAt')
-        .limit(20) // small buffer so we can skip blocked users client-side
-        .get();
+    final candidates = await _queue.orderBy('joinedAt').limit(20).get();
 
     QueryDocumentSnapshot<Map<String, dynamic>>? candidate;
     for (final doc in candidates.docs) {
@@ -43,7 +31,6 @@ class MatchmakingService {
       }
     }
 
-    // Nobody eligible waiting right now — join the queue ourselves.
     if (candidate == null) {
       await _joinQueue(uid: uid, gender: gender);
       return null;
@@ -51,29 +38,24 @@ class MatchmakingService {
 
     try {
       return await _db.runTransaction<String>((tx) async {
-        // Bind to a non-nullable local once — `candidate` itself can't be
-        // smart-cast to non-null inside this closure (Dart doesn't promote
-        // captured variables across an `await`), so every later reference
-        // needs a fresh, genuinely non-nullable name instead of repeated `!`.
-        final claimed = candidate!;
-
-        final freshSnap = await tx.get(claimed.reference);
+        final freshSnap = await tx.get(candidate!.reference);
         if (!freshSnap.exists) {
-          // Someone else claimed this candidate between our read above
-          // and this transaction — treat it like "nobody was there."
           throw StateError('candidate_already_claimed');
         }
+        final claimed = candidate;
 
         final callRef = _calls.doc();
         tx.set(callRef, {
           'participants': [claimed.id, uid],
-          'offererUid': claimed.id, // whoever was waiting longest sends the offer
+          'offererUid': claimed.id,
           'answererUid': uid,
           'status': 'pending',
+          'reconnectRequestedBy': <String>[],
+          'reconnectUsed': false,
           'createdAt': FieldValue.serverTimestamp(),
         });
         tx.delete(claimed.reference);
-        tx.delete(_queue.doc(uid)); // in case we were also queued
+        tx.delete(_queue.doc(uid));
         return callRef.id;
       });
     } on StateError {
@@ -91,7 +73,6 @@ class MatchmakingService {
 
   Future<void> leaveQueue(String uid) => _queue.doc(uid).delete();
 
-  /// Fires once when another user's [findOrQueue] claims this uid.
   Stream<String> watchForIncomingCall(String uid) {
     return _calls
         .where('participants', arrayContains: uid)
@@ -103,7 +84,11 @@ class MatchmakingService {
         .map((snap) => snap.docs.first.id);
   }
 
-  Future<void> endCall(String callId) {
-    return _calls.doc(callId).update({'status': 'ended', 'endedAt': FieldValue.serverTimestamp()});
+  /// [status] defaults to a normal end. Pass 'ended_by_report' when the
+  /// call is ending because someone just reported the other person — the
+  /// other device checks this value to decide whether it's safe to offer
+  /// a reconnect (it never is, after a report).
+  Future<void> endCall(String callId, {String status = 'ended'}) {
+    return _calls.doc(callId).update({'status': status, 'endedAt': FieldValue.serverTimestamp()});
   }
 }
