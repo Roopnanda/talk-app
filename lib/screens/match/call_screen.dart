@@ -11,6 +11,7 @@ import '../../widgets/glass_container.dart';
 import '../../widgets/gradient_background.dart';
 import '../../widgets/voice_orb.dart';
 import '../home/home_screen.dart';
+import 'reconnect_offer_screen.dart';
 
 class CallScreen extends StatefulWidget {
   const CallScreen({super.key, required this.callId, required this.isOfferer});
@@ -35,7 +36,7 @@ class _CallScreenState extends State<CallScreen> {
   bool _muted = false;
   bool _speakerOn = false;
   bool _connecting = true;
-  bool _endingCall = false; // guards against ending twice (local + remote signal both firing)
+  bool _endingCall = false;
   String? _otherUid;
   String? _error;
 
@@ -56,18 +57,22 @@ class _CallScreenState extends State<CallScreen> {
     setState(() => _otherUid = participants.firstWhere((id) => id != me, orElse: () => ''));
   }
 
-  /// The only way either device finds out the OTHER one hung up (or that
-  /// the 15-minute limit fired on their side first) — both devices watch
-  /// the same call document, and whoever changes `status` to "ended"
-  /// first is what the other one reacts to.
+  /// How either device finds out the OTHER one ended the call — a manual
+  /// hang-up, the 15-minute limit, or a report — since none of those
+  /// happen locally on both devices at once.
   void _watchForRemoteEnd() {
     _statusSub = FirebaseFirestore.instance
         .collection('calls')
         .doc(widget.callId)
         .snapshots()
         .listen((snap) {
-      if (snap.data()?['status'] == 'ended' && !_endingCall) {
-        _endCall(showAd: true, alreadyEndedRemotely: true);
+      final status = snap.data()?['status'];
+      if ((status == 'ended' || status == 'ended_by_report') && !_endingCall) {
+        _endCall(
+          showAd: true,
+          alreadyEndedRemotely: true,
+          offerReconnect: status == 'ended', // never after a report, on either side
+        );
       }
     });
   }
@@ -75,8 +80,6 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _connect() async {
     try {
       _webrtc.onRemoteStream((_) {
-        // Remote audio starts playing automatically once the track attaches;
-        // flip the "connecting" flag off so the UI reflects a live call.
         if (mounted) setState(() => _connecting = false);
       });
 
@@ -90,7 +93,7 @@ class _CallScreenState extends State<CallScreen> {
         if (!mounted) return;
         setState(() => _elapsed += const Duration(seconds: 1));
         if (_elapsed >= _maxCallDuration) {
-          _endCall(); // 15-minute limit reached — ends for both sides via the status listener above
+          _endCall();
         }
       });
     } catch (e) {
@@ -106,19 +109,37 @@ class _CallScreenState extends State<CallScreen> {
 
   bool get _timeRunningOut => _elapsed >= _maxCallDuration - const Duration(seconds: 60);
 
-  Future<void> _endCall({bool showAd = true, bool alreadyEndedRemotely = false}) async {
+  Future<void> _endCall({
+    bool showAd = true,
+    bool alreadyEndedRemotely = false,
+    bool offerReconnect = true,
+    String status = 'ended',
+  }) async {
     if (_endingCall) return;
     _endingCall = true;
     _ticker?.cancel();
     await _statusSub?.cancel();
     await _webrtc.hangUp();
     if (!alreadyEndedRemotely) {
-      await _matchmaking.endCall(widget.callId);
+      await _matchmaking.endCall(widget.callId, status: status);
     }
     if (showAd) {
       await AdsService.instance.showInterstitialBetweenCalls();
     }
-    if (mounted) {
+    if (!mounted) return;
+
+    if (offerReconnect && _otherUid != null && _otherUid!.isNotEmpty) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => ReconnectOfferScreen(
+            originalCallId: widget.callId,
+            otherUid: _otherUid!,
+            wasOfferer: widget.isOfferer,
+          ),
+        ),
+        (route) => false,
+      );
+    } else {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const HomeScreen()),
         (route) => false,
@@ -135,7 +156,7 @@ class _CallScreenState extends State<CallScreen> {
       callId: widget.callId,
       reason: reason,
     );
-    await _endCall(showAd: false);
+    await _endCall(showAd: false, offerReconnect: false, status: 'ended_by_report');
   }
 
   void _showReportSheet() {
