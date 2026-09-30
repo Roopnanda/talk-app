@@ -10,19 +10,24 @@
 <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 <uses-permission android:name="android.permission.WAKE_LOCK" />
 <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
 
 <application>
-    <!-- AdMob: required app ID meta-data tag. Missing/malformed = hard
-         crash on launch, per Google's own docs — this is Google's public
-         sample App ID, safe for testing, matches the test ad unit IDs
-         already used in ads_service.dart. Swap for your real AdMob App ID
-         (from the AdMob console, not an ad unit ID) before release. -->
+    <!-- AdMob: required app ID meta-data tag. -->
     <meta-data
         android:name="com.google.android.gms.ads.APPLICATION_ID"
         android:value="ca-app-pub-3940256099942544~3347511713" />
 
-    <!-- Meta Audience Network: no manifest entry required beyond internet
-         permission above; app ID/placement IDs are passed in Dart code. -->
+    <!-- Keeps the microphone alive for the length of a call even once
+         the screen turns off. Android requires a declared foreground
+         service with this exact type for background mic access from
+         Android 14 onward — started/stopped around each call by
+         CallForegroundService. -->
+    <service
+        android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+        android:foregroundServiceType="microphone"
+        android:exported="false" />
 </application>
