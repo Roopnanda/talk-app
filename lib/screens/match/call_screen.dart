@@ -213,7 +213,10 @@ class _CallScreenState extends State<CallScreen> {
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) {
-        if (!didPop) _endCall();
+        // Deliberately does nothing. Back/swipe used to end the call —
+        // that's exactly the accidental-hangup problem being fixed here.
+        // Only the explicit End button (or a report, or the other side
+        // hanging up) should ever end a call now.
       },
       child: Scaffold(
         body: GradientBackground(
