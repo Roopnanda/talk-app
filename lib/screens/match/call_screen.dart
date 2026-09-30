@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../../services/ads_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/call_foreground_service.dart';
 import '../../services/matchmaking_service.dart';
 import '../../services/report_service.dart';
 import '../../services/webrtc_service.dart';
@@ -79,6 +80,11 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _connect() async {
     try {
+      // Must start while clearly in the foreground — Android won't allow
+      // a microphone-type foreground service to be started later, once
+      // the app is already backgrounded.
+      await CallForegroundService.instance.start();
+
       _webrtc.onRemoteStream((_) {
         if (mounted) setState(() => _connecting = false);
       });
@@ -119,6 +125,7 @@ class _CallScreenState extends State<CallScreen> {
     _endingCall = true;
     _ticker?.cancel();
     await _statusSub?.cancel();
+    await CallForegroundService.instance.stop();
     await _webrtc.hangUp();
     if (!alreadyEndedRemotely) {
       await _matchmaking.endCall(widget.callId, status: status);
@@ -214,9 +221,9 @@ class _CallScreenState extends State<CallScreen> {
       canPop: false,
       onPopInvoked: (didPop) {
         // Deliberately does nothing. Back/swipe used to end the call —
-        // that's exactly the accidental-hangup problem being fixed here.
-        // Only the explicit End button (or a report, or the other side
-        // hanging up) should ever end a call now.
+        // that was the accidental-hangup problem being fixed here. Only
+        // the explicit End button, a report, or the other side hanging
+        // up should ever end a call now.
       },
       child: Scaffold(
         body: GradientBackground(
