@@ -1,7 +1,6 @@
 """
 Merges android_manifest_snippet.xml into the AndroidManifest.xml that
-`flutter create` just generated. Runs automatically in CI — nobody has
-to do this by hand.
+`flutter create` just generated. Runs automatically in CI.
 """
 import re
 import sys
@@ -28,6 +27,11 @@ if not meta_data_match:
     sys.exit("AdMob <meta-data> block not found in snippet — check the file.")
 meta_data = meta_data_match.group(0)
 
+service_match = re.search(r"<service\b[^>]*/>", snippet, re.DOTALL)
+if not service_match:
+    sys.exit("<service> block not found in snippet — check the file.")
+service_block = service_match.group(0)
+
 if "RECORD_AUDIO" in manifest:
     print("Manifest already patched — skipping.")
 else:
@@ -38,7 +42,8 @@ else:
         count=1,
     )
     manifest = manifest.replace(
-        "</application>", f"    {meta_data}\n</application>"
+        "</application>",
+        f"    {meta_data}\n    {service_block}\n</application>",
     )
     with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
         f.write(manifest)
