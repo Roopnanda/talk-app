@@ -14,23 +14,17 @@ dependencies:
   # State/storage
   shared_preferences: any
 
-  # Backend — reverted to fully unconstrained after the manually-pinned
-  # BoM 4.15.0 set (4.10.0 / 6.5.2 / 6.5.0) built successfully but still
-  # crashed at runtime with a Dart/native pigeon decode mismatch
-  # (RangeError in CoreFirebaseOptions.decode). That crash persisted even
-  # after excluding the one platform_interface version suspected of
-  # causing it, which means the manual pin was fighting pub's own
-  # resolver rather than fixing the real problem. Letting pub freely
-  # resolve the whole graph again is the more reliable path — if the
-  # original firebase_auth 6.6.0 Kotlin compile bug has since been
-  # patched upstream (likely, given the time that's passed), this should
-  # now resolve cleanly on its own.
+  # Backend — left fully unconstrained; a manually-pinned version set
+  # built successfully once but still crashed at runtime with a
+  # Dart/native mismatch, so letting pub freely resolve the whole graph
+  # is what actually worked.
   firebase_core: any
   firebase_auth: any
   cloud_firestore: any
 
   # Calling
   flutter_webrtc: any
+  flutter_foreground_task: any
 
   # Monetization
   google_mobile_ads: any
