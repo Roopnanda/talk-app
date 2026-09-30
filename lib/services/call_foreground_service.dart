@@ -1,10 +1,5 @@
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-/// Keeps the microphone alive for the length of a call. Without this,
-/// Android suspends microphone access once the screen turns off — a
-/// deliberate platform restriction (from Android 14 onward), not
-/// something wrong with the app. A foreground service with a visible
-/// notification is the only sanctioned way around it.
 class CallForegroundService {
   CallForegroundService._();
   static final CallForegroundService instance = CallForegroundService._();
@@ -24,18 +19,15 @@ class CallForegroundService {
         priority: NotificationPriority.LOW,
       ),
       iosNotificationOptions: const IOSNotificationOptions(),
-      foregroundTaskOptions: const ForegroundTaskOptions(
-        interval: 60000, // no repeating work needed — a long interval just avoids extra wakeups
+      foregroundTaskOptions: ForegroundTaskOptions(
+        // No repeating work needed; the service existing keeps the mic alive.
+        eventAction: ForegroundTaskEventAction.nothing(),
         autoRunOnBoot: false,
         allowWifiLock: false,
       ),
-      printDevLog: false,
     );
   }
 
-  /// Call this right when a call starts, while the app is clearly in the
-  /// foreground — Android does not allow a microphone-type foreground
-  /// service to be started once the app is already backgrounded.
   Future<void> start() async {
     await _ensureInitialized();
 
@@ -46,6 +38,7 @@ class CallForegroundService {
 
     await FlutterForegroundTask.startService(
       serviceId: 501,
+      serviceTypes: [ForegroundServiceTypes.microphone],
       notificationTitle: 'Talk — call in progress',
       notificationText: 'Tap to return to your call.',
       callback: startCallback,
@@ -62,8 +55,6 @@ void startCallback() {
   FlutterForegroundTask.setTaskHandler(_CallTaskHandler());
 }
 
-/// No periodic work needed — the service existing at all is what keeps
-/// the microphone alive. This just satisfies the plugin's required API.
 class _CallTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
