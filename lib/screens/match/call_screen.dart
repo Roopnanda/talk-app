@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../../data/topics_data.dart';
 import '../../services/ads_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/call_foreground_service.dart';
 import '../../services/matchmaking_service.dart';
+import '../../services/progress_service.dart';
 import '../../services/report_service.dart';
 import '../../services/webrtc_service.dart';
 import '../../theme/app_theme.dart';
@@ -30,6 +32,7 @@ class _CallScreenState extends State<CallScreen> {
   final _webrtc = WebrtcService();
   final _matchmaking = MatchmakingService();
   final _reports = ReportService();
+  final _progress = ProgressService();
 
   Timer? _ticker;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
@@ -40,13 +43,19 @@ class _CallScreenState extends State<CallScreen> {
   bool _endingCall = false;
   String? _otherUid;
   String? _error;
+  late String _topicPrompt;
 
   @override
   void initState() {
     super.initState();
+    _topicPrompt = TopicsRepository.randomPrompt();
     _loadOtherParticipant();
     _connect();
     _watchForRemoteEnd();
+  }
+
+  void _shuffleTopic() {
+    setState(() => _topicPrompt = TopicsRepository.randomPrompt());
   }
 
   Future<void> _loadOtherParticipant() async {
@@ -58,9 +67,6 @@ class _CallScreenState extends State<CallScreen> {
     setState(() => _otherUid = participants.firstWhere((id) => id != me, orElse: () => ''));
   }
 
-  /// How either device finds out the OTHER one ended the call — a manual
-  /// hang-up, the 15-minute limit, or a report — since none of those
-  /// happen locally on both devices at once.
   void _watchForRemoteEnd() {
     _statusSub = FirebaseFirestore.instance
         .collection('calls')
@@ -72,7 +78,7 @@ class _CallScreenState extends State<CallScreen> {
         _endCall(
           showAd: true,
           alreadyEndedRemotely: true,
-          offerReconnect: status == 'ended', // never after a report, on either side
+          offerReconnect: status == 'ended',
         );
       }
     });
@@ -80,9 +86,6 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _connect() async {
     try {
-      // Must start while clearly in the foreground — Android won't allow
-      // a microphone-type foreground service to be started later, once
-      // the app is already backgrounded.
       await CallForegroundService.instance.start();
 
       _webrtc.onRemoteStream((_) {
@@ -127,6 +130,7 @@ class _CallScreenState extends State<CallScreen> {
     await _statusSub?.cancel();
     await CallForegroundService.instance.stop();
     await _webrtc.hangUp();
+    await _progress.recordCallCompleted(_elapsed);
     if (!alreadyEndedRemotely) {
       await _matchmaking.endCall(widget.callId, status: status);
     }
@@ -220,10 +224,8 @@ class _CallScreenState extends State<CallScreen> {
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) {
-        // Deliberately does nothing. Back/swipe used to end the call —
-        // that was the accidental-hangup problem being fixed here. Only
-        // the explicit End button, a report, or the other side hanging
-        // up should ever end a call now.
+        // Deliberately does nothing — only End, a report, or the other
+        // side hanging up should ever end a call.
       },
       child: Scaffold(
         body: GradientBackground(
@@ -236,6 +238,33 @@ class _CallScreenState extends State<CallScreen> {
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: _timeRunningOut ? AppColors.warn : null,
                       ),
+                ),
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: GestureDetector(
+                    onTap: _shuffleTopic,
+                    child: GlassContainer(
+                      borderRadius: 16,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.lightbulb_outline_rounded, color: AppColors.accent, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _topicPrompt,
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              maxLines: 3,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.refresh_rounded, color: AppColors.textMuted, size: 18),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
                 const Spacer(),
                 VoiceOrb(size: 150, active: !_connecting),
