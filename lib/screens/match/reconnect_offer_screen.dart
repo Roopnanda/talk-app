@@ -7,6 +7,7 @@ import '../../widgets/glass_container.dart';
 import '../../widgets/gradient_background.dart';
 import '../../widgets/primary_button.dart';
 import '../../widgets/voice_orb.dart';
+import '../home/home_screen.dart';
 import 'call_screen.dart';
 import 'matching_screen.dart';
 
@@ -23,7 +24,7 @@ class ReconnectOfferScreen extends StatefulWidget {
 
   final String originalCallId;
   final String otherUid;
-  final bool wasOfferer; // this device's role in the call that just ended
+  final bool wasOfferer;
 
   @override
   State<ReconnectOfferScreen> createState() => _ReconnectOfferScreenState();
@@ -70,10 +71,6 @@ class _ReconnectOfferScreenState extends State<ReconnectOfferScreen> {
     _timeoutTimer = Timer(_waitLimit, _giveUpAndFindSomeoneNew);
   }
 
-  /// Both devices may attempt this once both uids are present — the
-  /// transaction's read-then-write on the SAME document is what makes
-  /// only one of those attempts actually succeed, no matter how close
-  /// together they happen.
   Future<void> _tryClaimReconnect() async {
     try {
       await _db.runTransaction((tx) async {
@@ -101,7 +98,7 @@ class _ReconnectOfferScreenState extends State<ReconnectOfferScreen> {
       });
     } catch (_) {
       // Lost the race to the other device — its write is what we're
-      // already listening for above, so nothing else to do here.
+      // already listening for above.
     }
   }
 
@@ -117,12 +114,14 @@ class _ReconnectOfferScreenState extends State<ReconnectOfferScreen> {
   }
 
   Future<void> _giveUpAndFindSomeoneNew() async {
-    // Withdraw my own request so a late reply from the other side can
-    // never pair me into a call I've already navigated away from.
+    await _withdrawMyRequest();
+    _findSomeoneNew();
+  }
+
+  Future<void> _withdrawMyRequest() async {
     await _originalRef.update({
       'reconnectRequestedBy': FieldValue.arrayRemove([_myUid]),
     }).catchError((_) {});
-    _findSomeoneNew();
   }
 
   void _findSomeoneNew() {
@@ -130,6 +129,21 @@ class _ReconnectOfferScreenState extends State<ReconnectOfferScreen> {
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const MatchingScreen()),
+      (route) => false,
+    );
+  }
+
+  /// Back/swipe while waiting withdraws the pending request first (so a
+  /// late reply from the other side can't pair you into a call you've
+  /// already left), then always lands on Home — never exits the app.
+  Future<void> _goHome() async {
+    if (_stage == _Stage.waiting) {
+      await _withdrawMyRequest();
+    }
+    _cleanup();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
       (route) => false,
     );
   }
@@ -147,20 +161,29 @@ class _ReconnectOfferScreenState extends State<ReconnectOfferScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: GradientBackground(
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Spacer(),
-                VoiceOrb(size: 140, active: _stage == _Stage.waiting),
-                const SizedBox(height: 32),
-                if (_stage == _Stage.choosing) ..._buildChoosing(context) else ..._buildWaiting(context),
-                const Spacer(),
-              ],
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) {
+        if (!didPop) _goHome();
+      },
+      child: Scaffold(
+        body: GradientBackground(
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Spacer(),
+                  VoiceOrb(size: 140, active: _stage == _Stage.waiting),
+                  const SizedBox(height: 32),
+                  if (_stage == _Stage.choosing)
+                    ..._buildChoosing(context)
+                  else
+                    ..._buildWaiting(context),
+                  const Spacer(),
+                ],
+              ),
             ),
           ),
         ),
