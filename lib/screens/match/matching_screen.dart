@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../models/user_profile.dart';
 import '../../services/auth_service.dart';
+import '../../services/call_foreground_service.dart';
 import '../../services/local_storage_service.dart';
 import '../../services/matchmaking_service.dart';
 import '../../theme/app_theme.dart';
@@ -23,6 +25,7 @@ class _MatchingScreenState extends State<MatchingScreen> {
   final _storage = LocalStorageService();
   StreamSubscription<String>? _incomingSub;
   bool _navigated = false;
+  bool _serviceStarted = false;
   String? _error;
 
   @override
@@ -33,12 +36,25 @@ class _MatchingScreenState extends State<MatchingScreen> {
 
   Future<void> _startSearch() async {
     try {
+      // Asked here, before joining the queue, instead of waiting until a
+      // call actually starts — a clearer moment for the prompt, and it
+      // means mic access is already granted by the time the foreground
+      // service below starts (it requires that, even with no audio sent
+      // yet).
+      await _ensureMicPermission();
+
+      // Keeps the match listener alive if the screen turns off while
+      // waiting — without this, Android can suspend it in the
+      // background, so a match can land but go unnoticed until the
+      // screen turns back on.
+      await CallForegroundService.instance.start();
+      _serviceStarted = true;
+
       final uid = await AuthService.instance.ensureSignedIn();
       final gender = await _storage.getGender();
 
       await _clearStaleState(uid);
 
-      // Listen in case someone else claims us from the queue first.
       _incomingSub = _matchmaking.watchForIncomingCall(uid).listen(
         (callId) => _goToCall(callId),
         onError: (e) {
@@ -48,15 +64,18 @@ class _MatchingScreenState extends State<MatchingScreen> {
 
       final callId = await _matchmaking.findOrQueue(uid: uid, gender: gender.storageValue);
       if (callId != null) _goToCall(callId);
-      // else: we're queued and waiting — the stream listener above will fire.
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
   }
 
-  /// Best-effort cleanup of leftovers from earlier attempts (a queue slot
-  /// never cancelled, or a call left "pending" after a failure). Without
-  /// this, a dead call can pull you straight back into it on the next try.
+  Future<void> _ensureMicPermission() async {
+    final stream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
+    for (final track in stream.getTracks()) {
+      await track.stop();
+    }
+  }
+
   Future<void> _clearStaleState(String uid) async {
     try {
       final db = FirebaseFirestore.instance;
@@ -70,23 +89,20 @@ class _MatchingScreenState extends State<MatchingScreen> {
       for (final doc in stale.docs) {
         await doc.reference.update({'status': 'ended'});
       }
-    } catch (_) {
-      // Non-fatal: matching itself will surface any real problem.
-    }
+    } catch (_) {}
   }
 
-  /// Both paths (we found someone / someone found us) end up here. The role
-  /// is decided from the shared call record, NOT from which path fired
-  /// first — that race is what left both phones waiting for an offer.
   Future<void> _goToCall(String callId) async {
     if (_navigated) return;
-    _navigated = true; // set immediately so only one trigger wins
+    _navigated = true;
     _incomingSub?.cancel();
     try {
       final myUid = AuthService.instance.uid;
       final snap = await FirebaseFirestore.instance.collection('calls').doc(callId).get();
       final isOfferer = snap.data()?['offererUid'] == myUid;
       if (!mounted) return;
+      // The foreground service keeps running — CallScreen takes over
+      // managing it from here and stops it once the call ends.
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (_) => CallScreen(callId: callId, isOfferer: isOfferer),
@@ -100,21 +116,43 @@ class _MatchingScreenState extends State<MatchingScreen> {
   Future<void> _cancel() async {
     final uid = AuthService.instance.uid;
     if (uid != null) await _matchmaking.leaveQueue(uid);
+    await _stopServiceIfStarted();
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _stopServiceIfStarted() async {
+    if (_serviceStarted) {
+      await CallForegroundService.instance.stop();
+      _serviceStarted = false;
+    }
   }
 
   @override
   void dispose() {
     _incomingSub?.cancel();
+    // Only stops it here on a path that never reached a call (e.g. the
+    // error screen). The success path hands ownership to CallScreen via
+    // pushReplacement, which never triggers this.
+    if (!_navigated) {
+      _stopServiceIfStarted();
+    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: GradientBackground(
-        child: SafeArea(
-          child: _error != null ? _buildError(context) : _buildSearching(context),
+    return PopScope(
+      canPop: false,
+      onPopInvoked: (didPop) {
+        // Same cleanup as tapping Cancel — without this, back/swipe
+        // during matching would leave your queue entry behind.
+        if (!didPop) _cancel();
+      },
+      child: Scaffold(
+        body: GradientBackground(
+          child: SafeArea(
+            child: _error != null ? _buildError(context) : _buildSearching(context),
+          ),
         ),
       ),
     );
@@ -143,7 +181,10 @@ class _MatchingScreenState extends State<MatchingScreen> {
           ),
           Center(
             child: GestureDetector(
-              onTap: () => Navigator.of(context).pop(),
+              onTap: () async {
+                await _stopServiceIfStarted();
+                if (mounted) Navigator.of(context).pop();
+              },
               child: GlassContainer(
                 borderRadius: 999,
                 padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 14),
@@ -163,11 +204,9 @@ class _MatchingScreenState extends State<MatchingScreen> {
         const Spacer(),
         const VoiceOrb(size: 150, active: true),
         const SizedBox(height: 32),
-        Text('Finding someone to talk to…',
-            style: Theme.of(context).textTheme.titleMedium),
+        Text('Finding someone to talk to…', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
-        Text('Usually takes a few seconds',
-            style: Theme.of(context).textTheme.bodyMedium),
+        Text('Usually takes a few seconds', style: Theme.of(context).textTheme.bodyMedium),
         const Spacer(),
         Padding(
           padding: const EdgeInsets.only(bottom: 40),
