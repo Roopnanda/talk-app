@@ -1,8 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'report_service.dart';
 
-/// Pairs two waiting users and creates the `calls/{callId}` document that
-/// [WebrtcService] then uses for signaling.
 class MatchmakingService {
   MatchmakingService({FirebaseFirestore? firestore, ReportService? reportService})
       : _db = firestore ?? FirebaseFirestore.instance,
@@ -19,7 +17,12 @@ class MatchmakingService {
       throw StateError('This account can no longer be matched.');
     }
 
-    final blocked = await _reports.blockedIds();
+    // Local blocks (this device, instant) combined with server-known
+    // blocks in EITHER direction — so a block is enforced no matter
+    // which side of the pair is doing the matching.
+    final localBlocked = await _reports.blockedIds();
+    final pairBlocked = await _reports.blockedPairUids(uid);
+    final blocked = {...localBlocked, ...pairBlocked};
 
     final candidates = await _queue.orderBy('joinedAt').limit(20).get();
 
@@ -42,10 +45,6 @@ class MatchmakingService {
         if (!freshSnap.exists) {
           throw StateError('candidate_already_claimed');
         }
-        // `candidate` is nullable to the analyzer even after the null
-        // check above (a Dart limitation across the `await` inside this
-        // closure) — binding it here with `!` gives us a genuinely
-        // non-nullable value for everything below.
         final claimed = candidate!;
 
         final callRef = _calls.doc();
