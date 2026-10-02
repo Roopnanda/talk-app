@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -17,28 +18,35 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
   bool _loading = false;
   String? _error;
   Map<String, dynamic>? _result;
+  int _searchGeneration = 0;
 
   Future<void> _search(String word) async {
     if (word.trim().isEmpty) return;
+    final myGeneration = ++_searchGeneration;
     setState(() {
       _loading = true;
       _error = null;
       _result = null;
     });
     try {
-      final res = await http.get(
-        Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(word.trim())}'),
-      );
+      final res = await http
+          .get(Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(word.trim())}'))
+          .timeout(const Duration(seconds: 12));
+      if (myGeneration != _searchGeneration) return; // a newer search started — ignore this stale reply
       if (res.statusCode == 200) {
         final list = jsonDecode(res.body) as List;
         setState(() => _result = list.first as Map<String, dynamic>);
       } else {
         setState(() => _error = 'No definition found for "$word".');
       }
+    } on TimeoutException {
+      if (myGeneration != _searchGeneration) return;
+      setState(() => _error = 'This is taking longer than usual. Try again?');
     } catch (e) {
-      setState(() => _error = 'Could not reach the dictionary right now.\n\n$e');
+      if (myGeneration != _searchGeneration) return;
+      setState(() => _error = 'Could not reach the dictionary right now.');
     } finally {
-      setState(() => _loading = false);
+      if (myGeneration == _searchGeneration) setState(() => _loading = false);
     }
   }
 
@@ -82,17 +90,20 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.search_rounded, color: AppColors.accent),
-                        onPressed: () => _search(_controller.text),
+                        icon: _loading
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent),
+                              )
+                            : const Icon(Icons.search_rounded, color: AppColors.accent),
+                        onPressed: _loading ? null : () => _search(_controller.text),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 20),
-                if (_loading)
-                  const Center(child: CircularProgressIndicator(color: AppColors.accent)),
-                if (_error != null)
-                  Text(_error!, style: Theme.of(context).textTheme.bodyMedium),
+                if (_error != null) Text(_error!, style: Theme.of(context).textTheme.bodyMedium),
                 if (_result != null) Expanded(child: _DefinitionCard(entry: _result!)),
               ],
             ),
@@ -131,8 +142,7 @@ class _DefinitionCard extends StatelessWidget {
               for (final def in (m['definitions'] as List? ?? []).take(3))
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
-                  child: Text('• ${def['definition']}',
-                      style: Theme.of(context).textTheme.bodyLarge),
+                  child: Text('• ${def['definition']}', style: Theme.of(context).textTheme.bodyLarge),
                 ),
               const SizedBox(height: 10),
             ],
