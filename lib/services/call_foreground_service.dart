@@ -1,9 +1,8 @@
 import 'dart:io';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-/// Keeps the microphone alive for the length of a call, and keeps
-/// matching/signaling alive while waiting — both suspended by Android
-/// once the screen turns off, without this.
+/// Keeps the microphone and Firestore signaling alive with the screen
+/// off — both get suspended by Android otherwise, without this.
 class CallForegroundService {
   CallForegroundService._();
   static final CallForegroundService instance = CallForegroundService._();
@@ -24,21 +23,18 @@ class CallForegroundService {
         priority: NotificationPriority.LOW,
       ),
       iosNotificationOptions: const IOSNotificationOptions(),
-      foregroundTaskOptions: const ForegroundTaskOptions(
-        interval: 60000,
+      foregroundTaskOptions: ForegroundTaskOptions(
+        // No real repeating work needed — the service existing at all is
+        // what keeps things alive. A long, harmless repeat interval
+        // stands in for "nothing," since that's the option with solid,
+        // current confirmation behind it.
+        eventAction: ForegroundTaskEventAction.repeat(60000),
         autoRunOnBoot: false,
-        allowWifiLock: true, // stops the WiFi radio sleeping with the screen off, which can stall Firestore's realtime listeners
+        allowWifiLock: true,
       ),
-      printDevLog: false,
     );
   }
 
-  /// Safe to call even if already running — it just does nothing in that
-  /// case. Calling start() a second time (e.g. once on the matching
-  /// screen, again when the call screen opens) previously risked a brief
-  /// stop/restart gap right as WebRTC's signaling listeners were being
-  /// set up, which is the likely cause of connections stalling until the
-  /// screen was turned back on.
   Future<void> start() async {
     if (_running) return;
     await _ensureInitialized();
