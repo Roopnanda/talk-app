@@ -31,8 +31,8 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
     try {
       final res = await http
           .get(Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(word.trim())}'))
-          .timeout(const Duration(seconds: 12));
-      if (myGeneration != _searchGeneration) return; // a newer search started — ignore this stale reply
+          .timeout(const Duration(seconds: 25));
+      if (myGeneration != _searchGeneration) return;
       if (res.statusCode == 200) {
         final list = jsonDecode(res.body) as List;
         setState(() => _result = list.first as Map<String, dynamic>);
@@ -41,7 +41,7 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
       }
     } on TimeoutException {
       if (myGeneration != _searchGeneration) return;
-      setState(() => _error = 'This is taking longer than usual. Try again?');
+      setState(() => _error = 'The dictionary is responding slowly right now. Try again in a moment.');
     } catch (e) {
       if (myGeneration != _searchGeneration) return;
       setState(() => _error = 'Could not reach the dictionary right now.');
@@ -103,6 +103,9 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
+                if (_loading)
+                  Text('Searching — this can take a little while…',
+                      style: Theme.of(context).textTheme.bodyMedium),
                 if (_error != null) Text(_error!, style: Theme.of(context).textTheme.bodyMedium),
                 if (_result != null) Expanded(child: _DefinitionCard(entry: _result!)),
               ],
