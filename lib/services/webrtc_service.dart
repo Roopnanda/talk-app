@@ -14,24 +14,16 @@ class WebrtcService {
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
   final _remoteRenderer = <void Function(MediaStream)>[];
+  final _stateListeners = <void Function(String)>[];
   final List<StreamSubscription> _subs = [];
 
-  // The other side's ICE candidates can arrive from Firestore BEFORE we've
-  // applied their SDP. Adding a candidate before that fails, so they wait
-  // here until the remote description is in place.
   bool _remoteDescriptionApplied = false;
   bool _answerApplyStarted = false;
   final List<RTCIceCandidate> _pendingCandidates = [];
 
-  // Calls start on the earpiece, like a normal phone call. The in-call
-  // Speaker button flips this.
   bool _speakerOn = false;
   bool get speakerOn => _speakerOn;
 
-  // Google's free STUN plus Metered's free-tier TURN relay for when direct
-  // peer-to-peer isn't possible. These credentials live in plain text in
-  // the source by design of Metered's static-credential tier — not a real
-  // secret. Revisit before a public launch.
   static const Map<String, dynamic> _iceServers = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
@@ -63,6 +55,20 @@ class WebrtcService {
     _remoteRenderer.add(callback);
   }
 
+  /// Live WebRTC connection-state text ("ICE: checking", "Connection:
+  /// connected", etc.) — purely diagnostic, so the NEXT time a call
+  /// stalls, we see exactly which stage it's stuck in instead of
+  /// guessing again.
+  void onConnectionStateChange(void Function(String) callback) {
+    _stateListeners.add(callback);
+  }
+
+  void _notifyState(String text) {
+    for (final cb in _stateListeners) {
+      cb(text);
+    }
+  }
+
   DocumentReference<Map<String, dynamic>> _callDoc(String callId) =>
       _db.collection('calls').doc(callId);
 
@@ -77,48 +83,27 @@ class WebrtcService {
       await _pc!.addTrack(track, _localStream!);
     }
 
+    _pc!.onIceConnectionState = (state) => _notifyState('ICE: ${state.toString().split('.').last}');
+    _pc!.onConnectionState = (state) => _notifyState('Connection: ${state.toString().split('.').last}');
+    _pc!.onIceGatheringState = (state) => _notifyState('Gathering: ${state.toString().split('.').last}');
+
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
-        // Re-apply the chosen route (earpiece unless the user tapped
-        // Speaker) — some phones reset it when remote audio starts.
-        _applyAudioRoute();
+        Helper.setSpeakerphoneOn(_speakerOn);
         for (final cb in _remoteRenderer) {
           cb(event.streams.first);
         }
       }
     };
-
-    // flutter_webrtc can default to loudspeaker, so set the route
-    // explicitly instead of trusting the default.
-    await _applyAudioRoute();
   }
 
-  Future<void> _applyAudioRoute() async {
-    if (_pc == null) return;
+  Future<void> toggleSpeaker() async {
+    _speakerOn = !_speakerOn;
     try {
       await Helper.setSpeakerphoneOn(_speakerOn);
-    } catch (_) {
-      // A failed route change shouldn't kill the call.
-    }
-    // The route has been reported to snap back a few seconds after being
-    // set on some devices; applying once more makes the choice stick.
-    Future.delayed(const Duration(seconds: 3), () async {
-      if (_pc == null) return;
-      try {
-        await Helper.setSpeakerphoneOn(_speakerOn);
-      } catch (_) {}
-    });
+    } catch (_) {}
   }
 
-  /// Flips between earpiece and loudspeaker. Returns true if the
-  /// loudspeaker is now on.
-  Future<bool> toggleSpeaker() async {
-    _speakerOn = !_speakerOn;
-    await _applyAudioRoute();
-    return _speakerOn;
-  }
-
-  /// The phone that was waiting in the queue creates the offer.
   Future<void> startAsOfferer(String callId) async {
     await _setupPeerConnection(callId);
 
@@ -147,7 +132,6 @@ class WebrtcService {
         .listen(_handleCandidateSnapshot));
   }
 
-  /// The phone that found someone waiting answers the offer.
   Future<void> joinAsAnswerer(String callId) async {
     await _setupPeerConnection(callId);
 
@@ -155,8 +139,6 @@ class WebrtcService {
       _callDoc(callId).collection('answerCandidates').add(candidate.toMap());
     };
 
-    // The offer is written from the OTHER device on its own timeline, so
-    // wait for it (with a timeout) instead of reading once.
     final snap = await _callDoc(callId)
         .snapshots()
         .firstWhere((s) => s.data()?['offer'] != null)
