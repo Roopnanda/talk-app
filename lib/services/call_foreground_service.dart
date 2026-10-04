@@ -24,10 +24,6 @@ class CallForegroundService {
       ),
       iosNotificationOptions: const IOSNotificationOptions(),
       foregroundTaskOptions: ForegroundTaskOptions(
-        // No real repeating work needed — the service existing at all is
-        // what keeps things alive. A long, harmless repeat interval
-        // stands in for "nothing," since that's the option with solid,
-        // current confirmation behind it.
         eventAction: ForegroundTaskEventAction.repeat(60000),
         autoRunOnBoot: false,
         allowWifiLock: true,
@@ -48,10 +44,14 @@ class CallForegroundService {
       await FlutterForegroundTask.requestIgnoreBatteryOptimization();
     }
 
+    // One state-neutral message for the whole service lifetime — it
+    // used to say "call in progress" even while just searching, because
+    // the service only truly starts once and this text never updates
+    // after that.
     await FlutterForegroundTask.startService(
       serviceId: 501,
-      notificationTitle: 'Talk — call in progress',
-      notificationText: 'Tap to return to your call.',
+      notificationTitle: 'Talk is active',
+      notificationText: 'Keeping your connection alive in the background.',
       callback: startCallback,
     );
     _running = true;
