@@ -44,6 +44,7 @@ class _CallScreenState extends State<CallScreen> {
   String? _otherUid;
   String? _error;
   late String _topicPrompt;
+  String _debugConnectionState = 'starting…';
 
   @override
   void initState() {
@@ -87,6 +88,10 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> _connect() async {
     try {
       await CallForegroundService.instance.start();
+
+      _webrtc.onConnectionStateChange((state) {
+        if (mounted) setState(() => _debugConnectionState = state);
+      });
 
       _webrtc.onRemoteStream((_) {
         if (mounted) setState(() => _connecting = false);
@@ -239,6 +244,14 @@ class _CallScreenState extends State<CallScreen> {
                         color: _timeRunningOut ? AppColors.warn : null,
                       ),
                 ),
+                if (_connecting)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      _debugConnectionState,
+                      style: const TextStyle(color: AppColors.textMuted, fontSize: 11, fontFamily: 'monospace'),
+                    ),
+                  ),
                 const SizedBox(height: 16),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -285,8 +298,8 @@ class _CallScreenState extends State<CallScreen> {
                         label: 'Speaker',
                         active: _speakerOn,
                         onTap: () async {
-                          final on = await _webrtc.toggleSpeaker();
-                          if (mounted) setState(() => _speakerOn = on);
+                          await _webrtc.toggleSpeaker();
+                          if (mounted) setState(() => _speakerOn = _webrtc.speakerOn);
                         },
                       ),
                       _circleAction(
