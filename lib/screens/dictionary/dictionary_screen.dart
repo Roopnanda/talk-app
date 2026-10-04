@@ -20,6 +20,17 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
   Map<String, dynamic>? _result;
   int _searchGeneration = 0;
 
+  Future<http.Response> _fetchWithRetry(Uri uri) async {
+    try {
+      return await http.get(uri).timeout(const Duration(seconds: 20));
+    } catch (_) {
+      // One quiet retry — a 5xx/522 from the dictionary service's own
+      // host is often transient and gone a couple seconds later.
+      await Future.delayed(const Duration(seconds: 2));
+      return await http.get(uri).timeout(const Duration(seconds: 20));
+    }
+  }
+
   Future<void> _search(String word) async {
     if (word.trim().isEmpty) return;
     final myGeneration = ++_searchGeneration;
@@ -29,38 +40,25 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
       _result = null;
     });
     try {
-      final res = await http
-          .get(Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(word.trim())}'))
-          .timeout(const Duration(seconds: 25));
+      final res = await _fetchWithRetry(
+        Uri.parse('https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(word.trim())}'),
+      );
       if (myGeneration != _searchGeneration) return;
       if (res.statusCode == 200) {
         final list = jsonDecode(res.body) as List;
         setState(() => _result = list.first as Map<String, dynamic>);
+      } else if (res.statusCode >= 500) {
+        setState(() => _error =
+            'The dictionary service is having problems right now (HTTP ${res.statusCode}). This isn\'t a word-not-found issue — try again shortly.');
       } else {
-        // Shows the real status instead of a one-size-fits-all message —
-        // a genuine 404 ("not in the dictionary") looks very different
-        // from a 403/429/500, which would point to something else
-        // entirely (rate limiting, a network-level block, etc).
-        String detail = 'HTTP ${res.statusCode}';
-        try {
-          final body = jsonDecode(res.body);
-          if (body is Map && body['message'] != null) {
-            detail = '$detail — ${body['message']}';
-          }
-        } catch (_) {
-          if (res.body.isNotEmpty) {
-            final snippet = res.body.length > 150 ? res.body.substring(0, 150) : res.body;
-            detail = '$detail — $snippet';
-          }
-        }
-        setState(() => _error = 'No definition found for "$word".\n\n$detail');
+        setState(() => _error = 'No definition found for "$word".');
       }
     } on TimeoutException {
       if (myGeneration != _searchGeneration) return;
       setState(() => _error = 'The dictionary is responding slowly right now. Try again in a moment.');
     } catch (e) {
       if (myGeneration != _searchGeneration) return;
-      setState(() => _error = 'Could not reach the dictionary right now.\n\n$e');
+      setState(() => _error = 'Could not reach the dictionary right now.');
     } finally {
       if (myGeneration == _searchGeneration) setState(() => _loading = false);
     }
@@ -123,8 +121,7 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
                   Text('Searching — this can take a little while…',
                       style: Theme.of(context).textTheme.bodyMedium),
                 if (_error != null)
-                  Text(_error!,
-                      style: const TextStyle(color: AppColors.textMuted, fontSize: 13)),
+                  Text(_error!, style: const TextStyle(color: AppColors.textMuted, fontSize: 13)),
                 if (_result != null) Expanded(child: _DefinitionCard(entry: _result!)),
               ],
             ),
