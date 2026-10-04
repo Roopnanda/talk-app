@@ -1,8 +1,11 @@
 import 'dart:io';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-/// Keeps the microphone and Firestore signaling alive with the screen
-/// off — both get suspended by Android otherwise, without this.
+/// Keeps the microphone, Firestore signaling, AND the actual WebRTC/ICE
+/// networking alive with the screen off. allowWifiLock alone kept the
+/// radio awake but not the CPU — ICE candidate gathering specifically
+/// needs active CPU processing to handle network callbacks, which is
+/// what allowWakeLock addresses.
 class CallForegroundService {
   CallForegroundService._();
   static final CallForegroundService instance = CallForegroundService._();
@@ -27,6 +30,7 @@ class CallForegroundService {
         eventAction: ForegroundTaskEventAction.repeat(60000),
         autoRunOnBoot: false,
         allowWifiLock: true,
+        allowWakeLock: true, // keeps the CPU itself active, not just the WiFi radio — the likely missing piece
       ),
     );
   }
@@ -44,10 +48,6 @@ class CallForegroundService {
       await FlutterForegroundTask.requestIgnoreBatteryOptimization();
     }
 
-    // One state-neutral message for the whole service lifetime — it
-    // used to say "call in progress" even while just searching, because
-    // the service only truly starts once and this text never updates
-    // after that.
     await FlutterForegroundTask.startService(
       serviceId: 501,
       notificationTitle: 'Talk is active',
