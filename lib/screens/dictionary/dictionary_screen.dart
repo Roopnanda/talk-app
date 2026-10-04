@@ -37,14 +37,30 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
         final list = jsonDecode(res.body) as List;
         setState(() => _result = list.first as Map<String, dynamic>);
       } else {
-        setState(() => _error = 'No definition found for "$word".');
+        // Shows the real status instead of a one-size-fits-all message —
+        // a genuine 404 ("not in the dictionary") looks very different
+        // from a 403/429/500, which would point to something else
+        // entirely (rate limiting, a network-level block, etc).
+        String detail = 'HTTP ${res.statusCode}';
+        try {
+          final body = jsonDecode(res.body);
+          if (body is Map && body['message'] != null) {
+            detail = '$detail — ${body['message']}';
+          }
+        } catch (_) {
+          if (res.body.isNotEmpty) {
+            final snippet = res.body.length > 150 ? res.body.substring(0, 150) : res.body;
+            detail = '$detail — $snippet';
+          }
+        }
+        setState(() => _error = 'No definition found for "$word".\n\n$detail');
       }
     } on TimeoutException {
       if (myGeneration != _searchGeneration) return;
       setState(() => _error = 'The dictionary is responding slowly right now. Try again in a moment.');
     } catch (e) {
       if (myGeneration != _searchGeneration) return;
-      setState(() => _error = 'Could not reach the dictionary right now.');
+      setState(() => _error = 'Could not reach the dictionary right now.\n\n$e');
     } finally {
       if (myGeneration == _searchGeneration) setState(() => _loading = false);
     }
@@ -106,7 +122,9 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
                 if (_loading)
                   Text('Searching — this can take a little while…',
                       style: Theme.of(context).textTheme.bodyMedium),
-                if (_error != null) Text(_error!, style: Theme.of(context).textTheme.bodyMedium),
+                if (_error != null)
+                  Text(_error!,
+                      style: const TextStyle(color: AppColors.textMuted, fontSize: 13)),
                 if (_result != null) Expanded(child: _DefinitionCard(entry: _result!)),
               ],
             ),
