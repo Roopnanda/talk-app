@@ -21,14 +21,23 @@ class _DictionaryScreenState extends State<DictionaryScreen> {
   int _searchGeneration = 0;
 
   Future<http.Response> _fetchWithRetry(Uri uri) async {
+    http.Response res;
     try {
-      return await http.get(uri).timeout(const Duration(seconds: 20));
+      res = await http.get(uri).timeout(const Duration(seconds: 20));
     } catch (_) {
-      // One quiet retry — a 5xx/522 from the dictionary service's own
-      // host is often transient and gone a couple seconds later.
       await Future.delayed(const Duration(seconds: 2));
-      return await http.get(uri).timeout(const Duration(seconds: 20));
+      return http.get(uri).timeout(const Duration(seconds: 20));
     }
+
+    // A clean 404 can also be the service's own backend flapping rather
+    // than a real "not in the dictionary" — one retry costs a couple
+    // seconds and resolves it when that's what's actually happening.
+    if (res.statusCode == 404) {
+      await Future.delayed(const Duration(seconds: 2));
+      final retry = await http.get(uri).timeout(const Duration(seconds: 20));
+      if (retry.statusCode == 200) return retry;
+    }
+    return res;
   }
 
   Future<void> _search(String word) async {
