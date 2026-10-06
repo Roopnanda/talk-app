@@ -36,6 +36,7 @@ class _CallScreenState extends State<CallScreen> {
   final _progress = ProgressService();
 
   Timer? _ticker;
+  Timer? _wakelockRefreshTimer;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _statusSub;
   Duration _elapsed = Duration.zero;
   bool _muted = false;
@@ -51,16 +52,28 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _topicPrompt = TopicsRepository.randomPrompt();
-    // Held only until the call actually connects, then released — this
-    // is specifically the window where BBK-family phones (Vivo/iQOO,
-    // OPPO/Realme/OnePlus) were observed stalling ICE negotiation once
-    // the screen turned off. No foreground-service API involved here,
-    // just the screen staying on, which sidesteps that OEM throttling
-    // trigger entirely for this one window.
-    WakelockPlus.enable();
+    _startWakelock();
     _loadOtherParticipant();
     _connect();
     _watchForRemoteEnd();
+  }
+
+  /// The plugin's own maintainers note the OS can silently release this
+  /// at any time — a single enable() call isn't reliable on its own.
+  /// Re-asserting it every few seconds while connecting is their
+  /// documented workaround, not a guess on our part.
+  void _startWakelock() {
+    WakelockPlus.enable();
+    _wakelockRefreshTimer?.cancel();
+    _wakelockRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      WakelockPlus.enable();
+    });
+  }
+
+  void _stopWakelock() {
+    _wakelockRefreshTimer?.cancel();
+    _wakelockRefreshTimer = null;
+    WakelockPlus.disable();
   }
 
   void _shuffleTopic() {
@@ -103,10 +116,7 @@ class _CallScreenState extends State<CallScreen> {
 
       _webrtc.onRemoteStream((_) {
         if (mounted) setState(() => _connecting = false);
-        // Connected — the vulnerable window has passed, release the
-        // screen so the rest of the call doesn't needlessly drain
-        // battery.
-        WakelockPlus.disable();
+        _stopWakelock(); // connected — the vulnerable window has passed
       });
 
       if (widget.isOfferer) {
@@ -123,7 +133,7 @@ class _CallScreenState extends State<CallScreen> {
         }
       });
     } catch (e) {
-      WakelockPlus.disable();
+      _stopWakelock();
       if (mounted) setState(() => _error = e.toString());
     }
   }
@@ -144,7 +154,7 @@ class _CallScreenState extends State<CallScreen> {
   }) async {
     if (_endingCall) return;
     _endingCall = true;
-    WakelockPlus.disable();
+    _stopWakelock();
     _ticker?.cancel();
     await _statusSub?.cancel();
     await CallForegroundService.instance.stop();
@@ -223,15 +233,15 @@ class _CallScreenState extends State<CallScreen> {
   String _reasonLabel(ReportReason r) => switch (r) {
         ReportReason.harassment => 'Harassment or bullying',
         ReportReason.sexualContent => 'Sexual content',
-        ReportReason.hateSpeech => 'Hate speech',
         ReportReason.spam => 'Spam or scam',
+        ReportReason.hateSpeech => 'Hate speech',
         ReportReason.minorSafety => 'I believe this user is a minor',
         ReportReason.other => 'Other',
       };
 
   @override
   void dispose() {
-    WakelockPlus.disable(); // safety net — covers any exit path that missed it above
+    _stopWakelock();
     _ticker?.cancel();
     _statusSub?.cancel();
     super.dispose();
@@ -261,9 +271,9 @@ class _CallScreenState extends State<CallScreen> {
                 ),
                 if (_connecting) ...[
                   const SizedBox(height: 4),
-                  Text(
+                  const Text(
                     'Keeping your screen on to connect faster',
-                    style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 12),
                   ),
                 ],
                 const SizedBox(height: 16),
