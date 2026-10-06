@@ -14,10 +14,7 @@ dependencies:
   # State/storage
   shared_preferences: any
 
-  # Backend — left fully unconstrained; a manually-pinned version set
-  # built successfully once but still crashed at runtime with a
-  # Dart/native mismatch, so letting pub freely resolve the whole graph
-  # is what actually worked.
+  # Backend
   firebase_core: any
   firebase_auth: any
   cloud_firestore: any
@@ -25,6 +22,7 @@ dependencies:
   # Calling
   flutter_webrtc: any
   flutter_foreground_task: any
+  wakelock_plus: any
 
   # Monetization
   google_mobile_ads: any
