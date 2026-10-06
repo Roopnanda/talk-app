@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../../data/topics_data.dart';
 import '../../services/ads_service.dart';
 import '../../services/auth_service.dart';
@@ -50,6 +51,13 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _topicPrompt = TopicsRepository.randomPrompt();
+    // Held only until the call actually connects, then released — this
+    // is specifically the window where BBK-family phones (Vivo/iQOO,
+    // OPPO/Realme/OnePlus) were observed stalling ICE negotiation once
+    // the screen turned off. No foreground-service API involved here,
+    // just the screen staying on, which sidesteps that OEM throttling
+    // trigger entirely for this one window.
+    WakelockPlus.enable();
     _loadOtherParticipant();
     _connect();
     _watchForRemoteEnd();
@@ -95,6 +103,10 @@ class _CallScreenState extends State<CallScreen> {
 
       _webrtc.onRemoteStream((_) {
         if (mounted) setState(() => _connecting = false);
+        // Connected — the vulnerable window has passed, release the
+        // screen so the rest of the call doesn't needlessly drain
+        // battery.
+        WakelockPlus.disable();
       });
 
       if (widget.isOfferer) {
@@ -111,6 +123,7 @@ class _CallScreenState extends State<CallScreen> {
         }
       });
     } catch (e) {
+      WakelockPlus.disable();
       if (mounted) setState(() => _error = e.toString());
     }
   }
@@ -131,6 +144,7 @@ class _CallScreenState extends State<CallScreen> {
   }) async {
     if (_endingCall) return;
     _endingCall = true;
+    WakelockPlus.disable();
     _ticker?.cancel();
     await _statusSub?.cancel();
     await CallForegroundService.instance.stop();
@@ -217,6 +231,7 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   void dispose() {
+    WakelockPlus.disable(); // safety net — covers any exit path that missed it above
     _ticker?.cancel();
     _statusSub?.cancel();
     super.dispose();
@@ -244,14 +259,13 @@ class _CallScreenState extends State<CallScreen> {
                         color: _timeRunningOut ? AppColors.warn : null,
                       ),
                 ),
-                if (_connecting)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      _debugConnectionState,
-                      style: const TextStyle(color: AppColors.textMuted, fontSize: 11, fontFamily: 'monospace'),
-                    ),
+                if (_connecting) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Keeping your screen on to connect faster',
+                    style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
                   ),
+                ],
                 const SizedBox(height: 16),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
