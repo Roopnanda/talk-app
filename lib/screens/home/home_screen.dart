@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import '../../services/ads_service.dart';
+import '../../services/local_storage_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/glass_container.dart';
 import '../../widgets/gradient_background.dart';
@@ -21,6 +22,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   BannerAd? _banner;
+  final _storage = LocalStorageService();
 
   @override
   void initState() {
@@ -32,6 +34,59 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _banner?.dispose();
     super.dispose();
+  }
+
+  Future<void> _startTalking() async {
+    final seenTip = await _storage.hasSeenScreenOnTip();
+    if (!seenTip && mounted) {
+      await _showScreenOnTip();
+      await _storage.markScreenOnTipSeen();
+    }
+    if (mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const MatchingScreen()),
+      );
+    }
+  }
+
+  Future<void> _showScreenOnTip() {
+    return showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: GlassContainer(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.lightbulb_outline_rounded, color: AppColors.accent),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text('One quick tip', style: Theme.of(context).textTheme.titleMedium),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'On some phones — especially Xiaomi/Redmi/POCO, Vivo/iQOO, and OPPO/Realme/OnePlus — keeping your screen on while we connect you leads to a more reliable call. These brands manage background apps more aggressively than others, which can occasionally delay the connection if your screen turns off.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 20),
+              Align(
+                alignment: Alignment.centerRight,
+                child: PrimaryButton(
+                  label: 'Got it',
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -73,9 +128,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       PrimaryButton(
                         label: 'Start talking',
                         icon: Icons.call_rounded,
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const MatchingScreen()),
-                        ),
+                        onPressed: _startTalking,
                       ),
                     ],
                   ),
