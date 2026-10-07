@@ -65,6 +65,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.lightbulb_outline_rounded, color: AppColors.accent, size: 18),
+                        const SizedBox(width: 8),
+                        Text('Tip for faster connecting', style: Theme.of(context).textTheme.titleMedium),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'On Xiaomi/Redmi/POCO, Vivo/iQOO, and OPPO/Realme/OnePlus phones, keeping your screen on while we connect you leads to a more reliable call — these brands manage background apps more aggressively than others.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              GlassContainer(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text('About', style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 8),
                     Text(
